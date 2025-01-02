@@ -19,6 +19,7 @@ from opentelemetry.semconv_ai import (
 from opentelemetry.context.context import Context
 from opentelemetry.trace import SpanKind, set_span_in_context, Tracer
 from opentelemetry.trace.span import Span
+from opentelemetry._events import EventLogger
 
 from opentelemetry import context as context_api
 from opentelemetry.instrumentation.langchain.utils import (
@@ -264,6 +265,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         self.token_histogram = token_histogram
         self.spans: dict[UUID, SpanHolder] = {}
         self.run_inline = True
+        self.event_logger = EventLogger()
 
     @staticmethod
     def _get_name_from_callback(
