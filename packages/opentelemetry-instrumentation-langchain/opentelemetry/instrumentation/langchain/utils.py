@@ -5,8 +5,9 @@ import os
 import traceback
 from opentelemetry import context as context_api
 from opentelemetry.instrumentation.langchain.config import Config
+from opentelemetry._events import Event, EventLogger
+from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as GenAIAttributes
 from pydantic import BaseModel
-
 
 class CallbackFilteredJSONEncoder(json.JSONEncoder):
     def default(self, o):
@@ -56,3 +57,42 @@ def dont_throw(func):
                 Config.exception_logger(e)
 
     return wrapper
+
+def emit_event(event_logger: EventLogger, name: str, attributes: dict, body: dict, trace_id: str, span_id: str):
+    event_logger.emit(
+        Event(
+            name=name,
+            attributes=attributes,
+            body=body,
+            trace_id=trace_id,
+            span_id=span_id,
+        )
+    )
+
+def emit_user_message_event(event_logger: EventLogger, message: dict, trace_id: str, span_id: str, capture_content: bool):
+    body = {"role": "user"}
+    if capture_content:
+        body["content"] = message.get("content")
+    emit_event(event_logger, "gen_ai.user.message", {GenAIAttributes.GEN_AI_SYSTEM: "langchain"}, body, trace_id, span_id)
+
+def emit_system_message_event(event_logger: EventLogger, content: str, trace_id: str, span_id: str, capture_content: bool):
+    body = {"role": "system"}
+    if capture_content:
+        body["content"] = content
+    emit_event(event_logger, "gen_ai.system.message", {GenAIAttributes.GEN_AI_SYSTEM: "langchain"}, body, trace_id, span_id)
+
+def emit_assistant_message_event(event_logger: EventLogger, message: dict, trace_id: str, span_id: str, capture_content: bool):
+    body = {"role": "assistant"}
+    if capture_content:
+        body["content"] = message.get("content")
+    emit_event(event_logger, "gen_ai.assistant.message", {GenAIAttributes.GEN_AI_SYSTEM: "langchain"}, body, trace_id, span_id)
+
+def emit_choice_event(event_logger: EventLogger, choice: dict, trace_id: str, span_id: str, capture_content: bool):
+    body = {
+        "index": choice.get("index", 0),
+        "finish_reason": choice.get("finish_reason", "unknown"),
+        "message": {}
+    }
+    if capture_content:
+        body["message"]["content"] = choice.get("content")
+    emit_event(event_logger, "gen_ai.choice", {GenAIAttributes.GEN_AI_SYSTEM: "langchain"}, body, trace_id, span_id)
