@@ -637,7 +637,7 @@ def init_haystack_instrumentor():
         return False
 
 
-def init_langchain_instrumentor():
+def init_langchain_instrumentor(use_legacy_attributes: bool = True):
     try:
         if is_package_installed("langchain"):
             Telemetry().capture("instrumentation:langchain:init")
