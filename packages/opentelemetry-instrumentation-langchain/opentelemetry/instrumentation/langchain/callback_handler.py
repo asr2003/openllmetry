@@ -138,18 +138,58 @@ def _set_chat_request(
                 _set_span_attribute(
                     span, f"{prefix}.parameters", json.dumps(function.get("parameters"))
                 )
+            i = 0
+            for message in messages:
+                for msg in message:
+                    span.set_attribute(
+                        f"{SpanAttributes.LLM_PROMPTS}.{i}.role",
+                        _message_type_to_role(msg.type),
+                    )
+                    if isinstance(msg.content, str):
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_PROMPTS}.{i}.content", msg.content
+                        )
+                    else:
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
+                            json.dumps(msg.content, cls=CallbackFilteredJSONEncoder),
+                        )
+                    i += 1
     else:
         trace_id = span.get_span_context().trace_id
         span_id = span.get_span_context().span_id
+        for i, function in enumerate(
+            kwargs.get("invocation_params", {}).get("functions", [])
+        ):
+            body = {
+                "index": i,
+                "name": function.get("name"),
+                "description": function.get("description"),
+                "parameters": json.dumps(function.get("parameters")),
+            }
+            self.event_logger.emit(
+                Event(
+                    name="gen_ai.function",
+                    attributes={SpanAttributes.LLM_SYSTEM: "Langchain"},
+                    body=body,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                )
+            )
+
         for message in messages:
             for msg in message:
                 emit_user_message_event(
                     self.event_logger,
-                    {"role": _message_type_to_role(msg.type), "content": msg.content},
+                    {
+                        "role": _message_type_to_role(msg.type),
+                        "content": msg.content if isinstance(msg.content, str) else json.dumps(msg.content, cls=CallbackFilteredJSONEncoder),
+                    },
                     trace_id,
                     span_id,
                     should_send_prompts(),
                 )
+
 
 
 def _set_chat_response(span: Span, response: LLMResult) -> None:
