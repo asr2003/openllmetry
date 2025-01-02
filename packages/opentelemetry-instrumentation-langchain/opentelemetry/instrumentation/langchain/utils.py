@@ -58,7 +58,8 @@ def dont_throw(func):
 
     return wrapper
 
-def emit_event(event_logger: EventLogger, name: str, attributes: dict, body: dict, trace_id: str, span_id: str):
+def emit_event(event_logger, name, attributes, body, trace_id, span_id):
+    """Helper function to emit an OpenTelemetry event."""
     event_logger.emit(
         Event(
             name=name,
@@ -69,25 +70,29 @@ def emit_event(event_logger: EventLogger, name: str, attributes: dict, body: dic
         )
     )
 
-def emit_user_message_event(event_logger: EventLogger, message: dict, trace_id: str, span_id: str, capture_content: bool):
+def emit_user_message_event(event_logger, message, trace_id, span_id, capture_content):
+    """Emit an event for user messages."""
     body = {"role": "user"}
     if capture_content:
         body["content"] = message.get("content")
     emit_event(event_logger, "gen_ai.user.message", {GenAIAttributes.GEN_AI_SYSTEM: "langchain"}, body, trace_id, span_id)
 
-def emit_system_message_event(event_logger: EventLogger, content: str, trace_id: str, span_id: str, capture_content: bool):
+def emit_system_message_event(event_logger, content, trace_id, span_id, capture_content):
+    """Emit an event for system messages."""
     body = {"role": "system"}
     if capture_content:
         body["content"] = content
     emit_event(event_logger, "gen_ai.system.message", {GenAIAttributes.GEN_AI_SYSTEM: "langchain"}, body, trace_id, span_id)
 
-def emit_assistant_message_event(event_logger: EventLogger, message: dict, trace_id: str, span_id: str, capture_content: bool):
+def emit_assistant_message_event(event_logger, message, trace_id, span_id, capture_content):
+    """Emit an event for assistant messages."""
     body = {"role": "assistant"}
     if capture_content:
         body["content"] = message.get("content")
     emit_event(event_logger, "gen_ai.assistant.message", {GenAIAttributes.GEN_AI_SYSTEM: "langchain"}, body, trace_id, span_id)
 
-def emit_choice_event(event_logger: EventLogger, choice: dict, trace_id: str, span_id: str, capture_content: bool):
+def emit_choice_event(event_logger, choice, trace_id, span_id, capture_content):
+    """Emit an event for a choice."""
     body = {
         "index": choice.get("index", 0),
         "finish_reason": choice.get("finish_reason", "unknown"),
