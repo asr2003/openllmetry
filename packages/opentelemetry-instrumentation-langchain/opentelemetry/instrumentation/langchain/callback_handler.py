@@ -28,7 +28,7 @@ from opentelemetry.instrumentation.langchain.utils import (
     should_send_prompts,
 )
 from opentelemetry.metrics import Histogram
-
+from traceloop.sdk.config import use_legacy_attributes as get_config_legacy_attributes
 
 @dataclass
 class SpanHolder:
@@ -191,7 +191,6 @@ def _set_chat_request(
                 )
 
 
-
 def _set_chat_response(span: Span, response: LLMResult) -> None:
     if not should_send_prompts():
         return
@@ -299,7 +298,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         self.spans: dict[UUID, SpanHolder] = {}
         self.run_inline = True
         self.event_logger = EventLogger()
-        self.use_legacy_attributes = use_legacy_attributes
+        self.use_legacy_attributes = use_legacy_attributes if use_legacy_attributes is not None else get_config_legacy_attributes()
 
     @staticmethod
     def _get_name_from_callback(
