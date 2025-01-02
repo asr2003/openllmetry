@@ -122,41 +122,34 @@ def _set_chat_request(
     kwargs: Any,
     span_holder: SpanHolder,
 ) -> None:
-    _set_request_params(span, serialized.get("kwargs", {}), span_holder)
+    if self.use_legacy_attributes:
+        _set_request_params(span, serialized.get("kwargs", {}), span_holder)
+        
+        if should_send_prompts():
+            for i, function in enumerate(
+                kwargs.get("invocation_params", {}).get("functions", [])
+            ):
+                prefix = f"{SpanAttributes.LLM_REQUEST_FUNCTIONS}.{i}"
 
-    if should_send_prompts():
-        for i, function in enumerate(
-            kwargs.get("invocation_params", {}).get("functions", [])
-        ):
-            prefix = f"{SpanAttributes.LLM_REQUEST_FUNCTIONS}.{i}"
-
-            _set_span_attribute(span, f"{prefix}.name", function.get("name"))
-            _set_span_attribute(
-                span, f"{prefix}.description", function.get("description")
-            )
-            _set_span_attribute(
-                span, f"{prefix}.parameters", json.dumps(function.get("parameters"))
-            )
-
-        i = 0
+                _set_span_attribute(span, f"{prefix}.name", function.get("name"))
+                _set_span_attribute(
+                    span, f"{prefix}.description", function.get("description")
+                )
+                _set_span_attribute(
+                    span, f"{prefix}.parameters", json.dumps(function.get("parameters"))
+                )
+    else:
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
         for message in messages:
             for msg in message:
-                span.set_attribute(
-                    f"{SpanAttributes.LLM_PROMPTS}.{i}.role",
-                    _message_type_to_role(msg.type),
+                emit_user_message_event(
+                    self.event_logger,
+                    {"role": _message_type_to_role(msg.type), "content": msg.content},
+                    trace_id,
+                    span_id,
+                    should_send_prompts(),
                 )
-                # if msg.content is string
-                if isinstance(msg.content, str):
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
-                        msg.content,
-                    )
-                else:
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
-                        json.dumps(msg.content, cls=CallbackFilteredJSONEncoder),
-                    )
-                i += 1
 
 
 def _set_chat_response(span: Span, response: LLMResult) -> None:
@@ -257,7 +250,7 @@ def _set_chat_response(span: Span, response: LLMResult) -> None:
 
 class TraceloopCallbackHandler(BaseCallbackHandler):
     def __init__(
-        self, tracer: Tracer, duration_histogram: Histogram, token_histogram: Histogram
+        self, tracer: Tracer, duration_histogram: Histogram, token_histogram: Histogram, use_legacy_attributes: bool = True,
     ) -> None:
         super().__init__()
         self.tracer = tracer
@@ -266,6 +259,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         self.spans: dict[UUID, SpanHolder] = {}
         self.run_inline = True
         self.event_logger = EventLogger()
+        self.use_legacy_attributes = use_legacy_attributes
 
     @staticmethod
     def _get_name_from_callback(
