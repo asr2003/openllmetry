@@ -496,6 +496,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Run when Chat Model starts running."""
+        """Emit events when the chat model starts."""
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return
 
@@ -503,6 +504,23 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         span = self._create_llm_span(
             run_id, parent_run_id, name, LLMRequestTypeValues.CHAT, metadata=metadata
         )
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
+
+        for message_group in messages:
+            for msg in message_group:
+                if msg.type == "system":
+                    emit_system_message_event(
+                        self.event_logger, msg.content, trace_id, span_id, should_send_prompts()
+                    )
+                elif msg.type == "user":
+                    emit_user_message_event(
+                        self.event_logger, msg.content, trace_id, span_id, should_send_prompts()
+                    )
+                elif msg.type == "assistant":
+                    emit_assistant_message_event(
+                        self.event_logger, msg.content, trace_id, span_id, should_send_prompts()
+                    )
         _set_chat_request(span, serialized, messages, kwargs, self.spans[run_id])
 
     @dont_throw
@@ -525,6 +543,13 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         span = self._create_llm_span(
             run_id, parent_run_id, name, LLMRequestTypeValues.COMPLETION
         )
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
+
+        for prompt in prompts:
+            emit_user_message_event(
+                self.event_logger, {"content": prompt}, trace_id, span_id, should_send_prompts()
+            )
         _set_llm_request(span, serialized, prompts, kwargs, self.spans[run_id])
 
     @dont_throw
@@ -540,6 +565,18 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
             return
 
         span = self._get_span(run_id)
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
+
+        for i, generations in enumerate(response.generations):
+            for choice in generations:
+                emit_choice_event(
+                    self.event_logger,
+                    {"index": i, "finish_reason": choice.generation_info.get("finish_reason", "stop"), "content": choice.text},
+                    trace_id,
+                    span_id,
+                    should_send_prompts()
+                )
 
         model_name = None
         if response.llm_output is not None:
@@ -658,6 +695,12 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
                     cls=CallbackFilteredJSONEncoder,
                 ),
             )
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
+
+        emit_user_message_event(
+            self.event_logger, {"content": input_str}, trace_id, span_id, should_send_prompts()
+        )
 
     @dont_throw
     def on_tool_end(
