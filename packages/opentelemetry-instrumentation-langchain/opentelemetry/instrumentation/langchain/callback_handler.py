@@ -117,7 +117,6 @@ def _set_request_params(span, kwargs, span_holder: SpanHolder):
         span, SpanAttributes.LLM_REQUEST_TEMPERATURE, params.get("temperature"), trace_id, span_id
     )
     _set_span_attribute_or_emit_event(span, span_holder.event_logger, SpanAttributes.LLM_REQUEST_TOP_P, params.get("top_p"),  trace_id, span_id)
-)
 
 
 def _set_llm_request(
