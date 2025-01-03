@@ -31,8 +31,6 @@ from traceloop.sdk.instruments import Instruments
 from traceloop.sdk.tracing.content_allow_list import ContentAllowList
 from traceloop.sdk.utils import is_notebook
 from traceloop.sdk.utils.package_check import is_package_installed
-from traceloop.sdk.config import use_legacy_attributes
-
 from typing import Callable, Dict, Optional, Set
 
 
@@ -64,7 +62,6 @@ class TracerWrapper(object):
     __tracer_provider: TracerProvider = None
     __image_uploader: ImageUploader = None
     __disabled: bool = False
-    use_legacy_attributes: bool = use_legacy_attributes()
 
     def __new__(
         cls,
@@ -223,11 +220,6 @@ class TracerWrapper(object):
         if self.__spans_processor_original_on_start:
             self.__spans_processor_original_on_start(span, parent_context)
 
-        if TracerWrapper.use_legacy_attributes:
-            span.set_attribute("custom.attribute", value)
-        else:
-            self.event_logger.emit({"name": "custom.event", "attributes": {"key": value}})
-
     @staticmethod
     def set_static_params(
         resource_attributes: dict,
@@ -239,7 +231,6 @@ class TracerWrapper(object):
         TracerWrapper.enable_content_tracing = enable_content_tracing
         TracerWrapper.endpoint = endpoint
         TracerWrapper.headers = headers
-        TracerWrapper.use_legacy_attributes = use_legacy_attributes()
 
     @classmethod
     def verify_initialized(cls) -> bool:
@@ -401,7 +392,7 @@ def init_instrumentations(
             if init_lancedb_instrumentor():
                 instrument_set = True
         elif instrument == Instruments.LANGCHAIN:
-            if init_langchain_instrumentor(TracerWrapper.use_legacy_attributes):
+            if init_langchain_instrumentor():
                 instrument_set = True
         elif instrument == Instruments.LLAMA_INDEX:
             if init_llama_index_instrumentor():
@@ -637,7 +628,7 @@ def init_haystack_instrumentor():
         return False
 
 
-def init_langchain_instrumentor(use_legacy_attributes: bool = True):
+def init_langchain_instrumentor():
     try:
         if is_package_installed("langchain"):
             Telemetry().capture("instrumentation:langchain:init")
@@ -645,7 +636,6 @@ def init_langchain_instrumentor(use_legacy_attributes: bool = True):
 
             instrumentor = LangchainInstrumentor(
                 exception_logger=lambda e: Telemetry().log_exception(e),
-                use_legacy_attributes=use_legacy_attributes,
             )
             if not instrumentor.is_instrumented_by_opentelemetry:
                 instrumentor.instrument()
