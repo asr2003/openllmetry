@@ -608,9 +608,16 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         trace_id = span.get_span_context().trace_id
         span_id = span.get_span_context().span_id
 
-        for prompt in prompts:
-            emit_user_message_event(
-                self.event_logger, {"content": prompt}, trace_id, span_id, should_send_prompts()
+
+        for i, prompt in enumerate(prompts):
+            _set_span_attribute_or_emit_event(
+                span,
+                self.event_logger,
+                f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
+                prompt,
+                trace_id,
+                span_id,
+                self.use_legacy_attributes,
             )
         _set_llm_request(span, serialized, prompts, kwargs, self.spans[run_id])
 
