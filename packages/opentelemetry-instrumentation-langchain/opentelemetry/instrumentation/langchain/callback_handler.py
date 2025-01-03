@@ -54,9 +54,28 @@ def _message_type_to_role(message_type: str) -> str:
         return "unknown"
 
 
-def _set_span_attribute(span, name, value):
-    if value is not None:
-        span.set_attribute(name, value)
+# def _set_span_attribute(span, name, value):
+#     if value is not None:
+#         span.set_attribute(name, value)
+
+def _set_span_attribute_or_emit_event(span, event_logger, name, value, trace_id=None, span_id=None):
+    """
+    Handles both setting attributes (legacy) and emitting events (new behavior).
+    """
+    if TracerWrapper.use_legacy_attributes:
+        if value is not None:
+            span.set_attribute(name, value)
+    else:
+        if value is not None and trace_id and span_id:
+            event_logger.emit(
+                Event(
+                    name=name,
+                    attributes={SpanAttributes.LLM_SYSTEM: "Langchain"},
+                    body=value,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                )
+            )
 
 
 def _set_request_params(span, kwargs, span_holder: SpanHolder):
@@ -72,9 +91,12 @@ def _set_request_params(span, kwargs, span_holder: SpanHolder):
     else:
         model = "unknown"
 
-    span.set_attribute(SpanAttributes.LLM_REQUEST_MODEL, model)
+    trace_id = span.get_span_context().trace_id
+    span_id = span.get_span_context().span_id
+
+    _set_span_attribute_or_emit_event(span, span_holder.event_logger, SpanAttributes.LLM_REQUEST_MODEL, model, trace_id, span_id)
     # response is not available for LLM requests (as opposed to chat)
-    span.set_attribute(SpanAttributes.LLM_RESPONSE_MODEL, model)
+    _set_span_attribute_or_emit_event(span, span_holder.event_logger, SpanAttributes.LLM_RESPONSE_MODEL, model, trace_id, span_id)
 
     if "invocation_params" in kwargs:
         params = (
@@ -83,15 +105,19 @@ def _set_request_params(span, kwargs, span_holder: SpanHolder):
     else:
         params = kwargs
 
-    _set_span_attribute(
+    _set_span_attribute_or_emit_event(
         span,
+        span_holder.event_logger,
         SpanAttributes.LLM_REQUEST_MAX_TOKENS,
         params.get("max_tokens") or params.get("max_new_tokens"),
+         trace_id,
+        span_id
     )
-    _set_span_attribute(
-        span, SpanAttributes.LLM_REQUEST_TEMPERATURE, params.get("temperature")
+    _set_span_attribute_or_emit_event(
+        span, SpanAttributes.LLM_REQUEST_TEMPERATURE, params.get("temperature"), trace_id, span_id
     )
-    _set_span_attribute(span, SpanAttributes.LLM_REQUEST_TOP_P, params.get("top_p"))
+    _set_span_attribute_or_emit_event(span, span_holder.event_logger, SpanAttributes.LLM_REQUEST_TOP_P, params.get("top_p"),  trace_id, span_id)
+)
 
 
 def _set_llm_request(
@@ -105,13 +131,24 @@ def _set_llm_request(
 
     if should_send_prompts():
         for i, msg in enumerate(prompts):
-            span.set_attribute(
+                        trace_id = span.get_span_context().trace_id
+            span_id = span.get_span_context().span_id
+
+            _set_span_attribute_or_emit_event(
+                span,
+                span_holder.event_logger,
                 f"{SpanAttributes.LLM_PROMPTS}.{i}.role",
                 "user",
+                trace_id,
+                span_id,
             )
             span.set_attribute(
+                span,
+                span_holder.event_logger,
                 f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
                 msg,
+                trace_id,
+                span_id,
             )
 
 
@@ -122,10 +159,11 @@ def _set_chat_request(
     kwargs: Any,
     span_holder: SpanHolder,
 ) -> None:
-    if self.use_legacy_attributes:
         _set_request_params(span, serialized.get("kwargs", {}), span_holder)
         
         if should_send_prompts():
+            trace_id = span.get_span_context().trace_id
+            span_id = span.get_span_context().span_id
             for i, function in enumerate(
                 kwargs.get("invocation_params", {}).get("functions", [])
             ):
