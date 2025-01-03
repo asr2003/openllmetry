@@ -62,7 +62,7 @@ def _set_span_attribute_or_emit_event(span, event_logger, name, value, trace_id=
     """
     Handles both setting attributes (legacy) and emitting events (new behavior).
     """
-    if TracerWrapper.use_legacy_attributes:
+    if use_legacy_attributes:
         if value is not None:
             span.set_attribute(name, value)
     else:
@@ -79,6 +79,9 @@ def _set_span_attribute_or_emit_event(span, event_logger, name, value, trace_id=
 
 
 def _set_request_params(span, kwargs, span_holder: SpanHolder):
+    trace_id = span.get_span_context().trace_id
+    span_id = span.get_span_context().span_id
+
     for model_tag in ("model", "model_id", "model_name"):
         if (model := kwargs.get(model_tag)) is not None:
             span_holder.request_model = model
@@ -90,9 +93,6 @@ def _set_request_params(span, kwargs, span_holder: SpanHolder):
             break
     else:
         model = "unknown"
-
-    trace_id = span.get_span_context().trace_id
-    span_id = span.get_span_context().span_id
 
     _set_span_attribute_or_emit_event(span, span_holder.event_logger, SpanAttributes.LLM_REQUEST_MODEL, model, trace_id, span_id)
     # response is not available for LLM requests (as opposed to chat)
@@ -127,13 +127,13 @@ def _set_llm_request(
     kwargs: Any,
     span_holder: SpanHolder,
 ) -> None:
+    """Set attributes or emit events for LLM requests."""
     _set_request_params(span, kwargs, span_holder)
 
     if should_send_prompts():
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
         for i, msg in enumerate(prompts):
-                        trace_id = span.get_span_context().trace_id
-            span_id = span.get_span_context().span_id
-
             _set_span_attribute_or_emit_event(
                 span,
                 span_holder.event_logger,
