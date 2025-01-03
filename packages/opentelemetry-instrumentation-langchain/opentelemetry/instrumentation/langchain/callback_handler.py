@@ -41,7 +41,7 @@ class SpanHolder:
     entity_path: str
     start_time: float = field(default_factory=time.time)
     request_model: Optional[str] = None
-
+    event_logger: Optional[EventLogger] = None
 
 def _message_type_to_role(message_type: str) -> str:
     if message_type == "human":
@@ -58,7 +58,8 @@ def _message_type_to_role(message_type: str) -> str:
 #     if value is not None:
 #         span.set_attribute(name, value)
 
-def _set_span_attribute_or_emit_event(span, event_logger, name, value, trace_id=None, span_id=None):
+def _set_span_attribute_or_emit_event(span, event_logger, name, value, trace_id=None, span_id=None, use_legacy_attributes=True
+):
     """
     Handles both setting attributes (legacy) and emitting events (new behavior).
     """
@@ -142,7 +143,7 @@ def _set_llm_request(
                 trace_id,
                 span_id,
             )
-            span.set_attribute(
+            _set_span_attribute_or_emit_event(
                 span,
                 span_holder.event_logger,
                 f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
@@ -316,7 +317,7 @@ def _set_chat_response(span: Span, response: LLMResult) -> None:
 
 class TraceloopCallbackHandler(BaseCallbackHandler):
     def __init__(
-        self, tracer: Tracer, duration_histogram: Histogram, token_histogram: Histogram, use_legacy_attributes: bool = True,
+        self, tracer: Tracer, duration_histogram: Histogram, token_histogram: Histogram, use_legacy_attributes: Optional[bool] = None,
     ) -> None:
         super().__init__()
         self.tracer = tracer
