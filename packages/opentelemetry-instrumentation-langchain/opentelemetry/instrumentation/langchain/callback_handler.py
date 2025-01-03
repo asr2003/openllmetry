@@ -19,6 +19,7 @@ from opentelemetry.semconv_ai import (
 from opentelemetry.context.context import Context
 from opentelemetry.trace import SpanKind, set_span_in_context, Tracer
 from opentelemetry.trace.span import Span
+from opentelemetry._events import EventLogger, Event
 
 from opentelemetry import context as context_api
 from opentelemetry.instrumentation.langchain.utils import (
@@ -28,6 +29,12 @@ from opentelemetry.instrumentation.langchain.utils import (
 )
 from opentelemetry.metrics import Histogram
 
+class ConcreteEventLogger(EventLogger):
+    def emit(self, event: Event):
+        """
+        Handle the emitted event. You can log it, store it, or perform any action.
+        """
+        print(f"Event emitted: {event}")
 
 @dataclass
 class SpanHolder:
@@ -40,7 +47,7 @@ class SpanHolder:
     entity_path: str
     start_time: float = field(default_factory=time.time)
     request_model: Optional[str] = None
-
+    event_logger: Optional[EventLogger] = None
 
 def _message_type_to_role(message_type: str) -> str:
     if message_type == "human":
@@ -53,12 +60,34 @@ def _message_type_to_role(message_type: str) -> str:
         return "unknown"
 
 
-def _set_span_attribute(span, name, value):
-    if value is not None:
-        span.set_attribute(name, value)
+# def _set_span_attribute(span, name, value):
+#     if value is not None:
+#         span.set_attribute(name, value)
+
+def _set_span_attribute_or_emit_event(span, event_logger, name, value, trace_id=None, span_id=None, use_legacy_attributes=True
+):
+    """
+    Handles both setting attributes (legacy) and emitting events (new behavior).
+    """
+    if use_legacy_attributes:
+        if value is not None:
+            span.set_attribute(name, value)
+    elif event_logger and trace_id and span_id:
+            event_logger.emit(
+                Event(
+                    name=name,
+                    attributes={SpanAttributes.LLM_SYSTEM: "Langchain"},
+                    body=value,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                )
+            )
 
 
 def _set_request_params(span, kwargs, span_holder: SpanHolder):
+    trace_id = span.get_span_context().trace_id
+    span_id = span.get_span_context().span_id
+
     for model_tag in ("model", "model_id", "model_name"):
         if (model := kwargs.get(model_tag)) is not None:
             span_holder.request_model = model
@@ -71,9 +100,9 @@ def _set_request_params(span, kwargs, span_holder: SpanHolder):
     else:
         model = "unknown"
 
-    span.set_attribute(SpanAttributes.LLM_REQUEST_MODEL, model)
+    _set_span_attribute_or_emit_event(span, span_holder.event_logger, SpanAttributes.LLM_REQUEST_MODEL, model, trace_id, span_id)
     # response is not available for LLM requests (as opposed to chat)
-    span.set_attribute(SpanAttributes.LLM_RESPONSE_MODEL, model)
+    _set_span_attribute_or_emit_event(span, span_holder.event_logger, SpanAttributes.LLM_RESPONSE_MODEL, model, trace_id, span_id)
 
     if "invocation_params" in kwargs:
         params = (
@@ -82,15 +111,18 @@ def _set_request_params(span, kwargs, span_holder: SpanHolder):
     else:
         params = kwargs
 
-    _set_span_attribute(
+    _set_span_attribute_or_emit_event(
         span,
+        span_holder.event_logger,
         SpanAttributes.LLM_REQUEST_MAX_TOKENS,
         params.get("max_tokens") or params.get("max_new_tokens"),
+         trace_id,
+        span_id
     )
-    _set_span_attribute(
-        span, SpanAttributes.LLM_REQUEST_TEMPERATURE, params.get("temperature")
+    _set_span_attribute_or_emit_event(
+        span, SpanAttributes.LLM_REQUEST_TEMPERATURE, params.get("temperature"), trace_id, span_id
     )
-    _set_span_attribute(span, SpanAttributes.LLM_REQUEST_TOP_P, params.get("top_p"))
+    _set_span_attribute_or_emit_event(span, span_holder.event_logger, SpanAttributes.LLM_REQUEST_TOP_P, params.get("top_p"),  trace_id, span_id)
 
 
 def _set_llm_request(
@@ -100,17 +132,28 @@ def _set_llm_request(
     kwargs: Any,
     span_holder: SpanHolder,
 ) -> None:
+    """Set attributes or emit events for LLM requests."""
     _set_request_params(span, kwargs, span_holder)
 
     if should_send_prompts():
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
         for i, msg in enumerate(prompts):
-            span.set_attribute(
+            _set_span_attribute_or_emit_event(
+                span,
+                span_holder.event_logger,
                 f"{SpanAttributes.LLM_PROMPTS}.{i}.role",
                 "user",
+                trace_id,
+                span_id,
             )
-            span.set_attribute(
+            _set_span_attribute_or_emit_event(
+                span,
+                span_holder.event_logger,
                 f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
                 msg,
+                trace_id,
+                span_id,
             )
 
 
@@ -121,41 +164,63 @@ def _set_chat_request(
     kwargs: Any,
     span_holder: SpanHolder,
 ) -> None:
+    """Set chat request attributes or emit events."""
     _set_request_params(span, serialized.get("kwargs", {}), span_holder)
 
     if should_send_prompts():
-        for i, function in enumerate(
-            kwargs.get("invocation_params", {}).get("functions", [])
-        ):
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
+
+        # Process invocation parameters
+        for i, function in enumerate(kwargs.get("invocation_params", {}).get("functions", [])):
             prefix = f"{SpanAttributes.LLM_REQUEST_FUNCTIONS}.{i}"
-
-            _set_span_attribute(span, f"{prefix}.name", function.get("name"))
-            _set_span_attribute(
-                span, f"{prefix}.description", function.get("description")
+            _set_span_attribute_or_emit_event(
+                span, 
+                event_logger=span_holder.context.event_logger,
+                name=f"{prefix}.name", 
+                value=function.get("name"), 
+                trace_id=trace_id, 
+                span_id=span_id
             )
-            _set_span_attribute(
-                span, f"{prefix}.parameters", json.dumps(function.get("parameters"))
+            _set_span_attribute_or_emit_event(
+                span, 
+                event_logger=span_holder.context.event_logger,
+                name=f"{prefix}.description", 
+                value=function.get("description"), 
+                trace_id=trace_id, 
+                span_id=span_id
+            )
+            _set_span_attribute_or_emit_event(
+                span, 
+                event_logger=span_holder.context.event_logger,
+                name=f"{prefix}.parameters", 
+                value=json.dumps(function.get("parameters")), 
+                trace_id=trace_id, 
+                span_id=span_id
             )
 
-        i = 0
-        for message in messages:
-            for msg in message:
-                span.set_attribute(
-                    f"{SpanAttributes.LLM_PROMPTS}.{i}.role",
-                    _message_type_to_role(msg.type),
+        # Process messages
+        for i, message_group in enumerate(messages):
+            for msg in message_group:
+                role = _message_type_to_role(msg.type)
+                content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content, cls=CallbackFilteredJSONEncoder)
+
+                _set_span_attribute_or_emit_event(
+                    span, 
+                    event_logger=span_holder.context.event_logger,
+                    name=f"{SpanAttributes.LLM_PROMPTS}.{i}.role", 
+                    value=role, 
+                    trace_id=trace_id, 
+                    span_id=span_id
                 )
-                # if msg.content is string
-                if isinstance(msg.content, str):
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
-                        msg.content,
-                    )
-                else:
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
-                        json.dumps(msg.content, cls=CallbackFilteredJSONEncoder),
-                    )
-                i += 1
+                _set_span_attribute_or_emit_event(
+                    span, 
+                    event_logger=span_holder.context.event_logger,
+                    name=f"{SpanAttributes.LLM_PROMPTS}.{i}.content", 
+                    value=content, 
+                    trace_id=trace_id, 
+                    span_id=span_id
+                )
 
 
 def _set_chat_response(span: Span, response: LLMResult) -> None:
@@ -256,7 +321,7 @@ def _set_chat_response(span: Span, response: LLMResult) -> None:
 
 class TraceloopCallbackHandler(BaseCallbackHandler):
     def __init__(
-        self, tracer: Tracer, duration_histogram: Histogram, token_histogram: Histogram
+        self, tracer: Tracer, duration_histogram: Histogram, token_histogram: Histogram, use_legacy_attributes: Optional[bool] = None,
     ) -> None:
         super().__init__()
         self.tracer = tracer
@@ -264,6 +329,8 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         self.token_histogram = token_histogram
         self.spans: dict[UUID, SpanHolder] = {}
         self.run_inline = True
+        self.event_logger = ConcreteEventLogger()
+        self.use_legacy_attributes = use_legacy_attributes if use_legacy_attributes is not None else use_legacy_attributes()
 
     @staticmethod
     def _get_name_from_callback(
@@ -496,6 +563,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Run when Chat Model starts running."""
+        """Emit events when the chat model starts."""
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return
 
@@ -503,6 +571,23 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         span = self._create_llm_span(
             run_id, parent_run_id, name, LLMRequestTypeValues.CHAT, metadata=metadata
         )
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
+
+        for message_group in messages:
+            for msg in message_group:
+                if msg.type == "system":
+                    emit_system_message_event(
+                        self.event_logger, msg.content, trace_id, span_id, should_send_prompts()
+                    )
+                elif msg.type == "user":
+                    emit_user_message_event(
+                        self.event_logger, msg.content, trace_id, span_id, should_send_prompts()
+                    )
+                elif msg.type == "assistant":
+                    emit_assistant_message_event(
+                        self.event_logger, msg.content, trace_id, span_id, should_send_prompts()
+                    )
         _set_chat_request(span, serialized, messages, kwargs, self.spans[run_id])
 
     @dont_throw
@@ -525,6 +610,20 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         span = self._create_llm_span(
             run_id, parent_run_id, name, LLMRequestTypeValues.COMPLETION
         )
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
+
+
+        for i, prompt in enumerate(prompts):
+            _set_span_attribute_or_emit_event(
+                span,
+                self.event_logger,
+                f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
+                prompt,
+                trace_id,
+                span_id,
+                self.use_legacy_attributes,
+            )
         _set_llm_request(span, serialized, prompts, kwargs, self.spans[run_id])
 
     @dont_throw
@@ -540,6 +639,18 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
             return
 
         span = self._get_span(run_id)
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
+
+        for i, generations in enumerate(response.generations):
+            for choice in generations:
+                emit_choice_event(
+                    self.event_logger,
+                    {"index": i, "finish_reason": choice.generation_info.get("finish_reason", "stop"), "content": choice.text},
+                    trace_id,
+                    span_id,
+                    should_send_prompts()
+                )
 
         model_name = None
         if response.llm_output is not None:
@@ -658,6 +769,12 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
                     cls=CallbackFilteredJSONEncoder,
                 ),
             )
+        trace_id = span.get_span_context().trace_id
+        span_id = span.get_span_context().span_id
+
+        emit_user_message_event(
+            self.event_logger, {"content": input_str}, trace_id, span_id, should_send_prompts()
+        )
 
     @dont_throw
     def on_tool_end(
