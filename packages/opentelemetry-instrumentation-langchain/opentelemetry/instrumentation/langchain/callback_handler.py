@@ -159,73 +159,62 @@ def _set_chat_request(
     kwargs: Any,
     span_holder: SpanHolder,
 ) -> None:
-        _set_request_params(span, serialized.get("kwargs", {}), span_holder)
-        
-        if should_send_prompts():
-            trace_id = span.get_span_context().trace_id
-            span_id = span.get_span_context().span_id
-            for i, function in enumerate(
-                kwargs.get("invocation_params", {}).get("functions", [])
-            ):
-                prefix = f"{SpanAttributes.LLM_REQUEST_FUNCTIONS}.{i}"
+    """Set chat request attributes or emit events."""
+    _set_request_params(span, serialized.get("kwargs", {}), span_holder)
 
-                _set_span_attribute(span, f"{prefix}.name", function.get("name"))
-                _set_span_attribute(
-                    span, f"{prefix}.description", function.get("description")
-                )
-                _set_span_attribute(
-                    span, f"{prefix}.parameters", json.dumps(function.get("parameters"))
-                )
-            i = 0
-            for message in messages:
-                for msg in message:
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_PROMPTS}.{i}.role",
-                        _message_type_to_role(msg.type),
-                    )
-                    if isinstance(msg.content, str):
-                        span.set_attribute(
-                            f"{SpanAttributes.LLM_PROMPTS}.{i}.content", msg.content
-                        )
-                    else:
-                        span.set_attribute(
-                            f"{SpanAttributes.LLM_PROMPTS}.{i}.content",
-                            json.dumps(msg.content, cls=CallbackFilteredJSONEncoder),
-                        )
-                    i += 1
-    else:
+    if should_send_prompts():
         trace_id = span.get_span_context().trace_id
         span_id = span.get_span_context().span_id
-        for i, function in enumerate(
-            kwargs.get("invocation_params", {}).get("functions", [])
-        ):
-            body = {
-                "index": i,
-                "name": function.get("name"),
-                "description": function.get("description"),
-                "parameters": json.dumps(function.get("parameters")),
-            }
-            self.event_logger.emit(
-                Event(
-                    name="gen_ai.function",
-                    attributes={SpanAttributes.LLM_SYSTEM: "Langchain"},
-                    body=body,
-                    trace_id=trace_id,
-                    span_id=span_id,
-                )
+
+        # Process invocation parameters
+        for i, function in enumerate(kwargs.get("invocation_params", {}).get("functions", [])):
+            prefix = f"{SpanAttributes.LLM_REQUEST_FUNCTIONS}.{i}"
+            _set_span_attribute_or_emit_event(
+                span, 
+                event_logger=span_holder.context.event_logger,
+                name=f"{prefix}.name", 
+                value=function.get("name"), 
+                trace_id=trace_id, 
+                span_id=span_id
+            )
+            _set_span_attribute_or_emit_event(
+                span, 
+                event_logger=span_holder.context.event_logger,
+                name=f"{prefix}.description", 
+                value=function.get("description"), 
+                trace_id=trace_id, 
+                span_id=span_id
+            )
+            _set_span_attribute_or_emit_event(
+                span, 
+                event_logger=span_holder.context.event_logger,
+                name=f"{prefix}.parameters", 
+                value=json.dumps(function.get("parameters")), 
+                trace_id=trace_id, 
+                span_id=span_id
             )
 
-        for message in messages:
-            for msg in message:
-                emit_user_message_event(
-                    self.event_logger,
-                    {
-                        "role": _message_type_to_role(msg.type),
-                        "content": msg.content if isinstance(msg.content, str) else json.dumps(msg.content, cls=CallbackFilteredJSONEncoder),
-                    },
-                    trace_id,
-                    span_id,
-                    should_send_prompts(),
+        # Process messages
+        for i, message_group in enumerate(messages):
+            for msg in message_group:
+                role = _message_type_to_role(msg.type)
+                content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content, cls=CallbackFilteredJSONEncoder)
+
+                _set_span_attribute_or_emit_event(
+                    span, 
+                    event_logger=span_holder.context.event_logger,
+                    name=f"{SpanAttributes.LLM_PROMPTS}.{i}.role", 
+                    value=role, 
+                    trace_id=trace_id, 
+                    span_id=span_id
+                )
+                _set_span_attribute_or_emit_event(
+                    span, 
+                    event_logger=span_holder.context.event_logger,
+                    name=f"{SpanAttributes.LLM_PROMPTS}.{i}.content", 
+                    value=content, 
+                    trace_id=trace_id, 
+                    span_id=span_id
                 )
 
 
