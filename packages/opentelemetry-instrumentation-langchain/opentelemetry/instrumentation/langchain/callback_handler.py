@@ -66,8 +66,7 @@ def _set_span_attribute_or_emit_event(span, event_logger, name, value, trace_id=
     if use_legacy_attributes:
         if value is not None:
             span.set_attribute(name, value)
-    else:
-        if value is not None and trace_id and span_id:
+    elif event_logger and trace_id and span_id:
             event_logger.emit(
                 Event(
                     name=name,
