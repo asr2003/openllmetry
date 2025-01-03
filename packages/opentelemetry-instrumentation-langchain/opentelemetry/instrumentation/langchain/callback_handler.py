@@ -19,7 +19,7 @@ from opentelemetry.semconv_ai import (
 from opentelemetry.context.context import Context
 from opentelemetry.trace import SpanKind, set_span_in_context, Tracer
 from opentelemetry.trace.span import Span
-from opentelemetry._events import EventLogger
+from opentelemetry._events import EventLogger, Event
 
 from opentelemetry import context as context_api
 from opentelemetry.instrumentation.langchain.utils import (
@@ -28,6 +28,13 @@ from opentelemetry.instrumentation.langchain.utils import (
     should_send_prompts,
 )
 from opentelemetry.metrics import Histogram
+
+class ConcreteEventLogger(EventLogger):
+    def emit(self, event: Event):
+        """
+        Handle the emitted event. You can log it, store it, or perform any action.
+        """
+        print(f"Event emitted: {event}")
 
 @dataclass
 class SpanHolder:
@@ -322,7 +329,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         self.token_histogram = token_histogram
         self.spans: dict[UUID, SpanHolder] = {}
         self.run_inline = True
-        self.event_logger = EventLogger()
+        self.event_logger = ConcreteEventLogger()
         self.use_legacy_attributes = use_legacy_attributes if use_legacy_attributes is not None else use_legacy_attributes()
 
     @staticmethod
